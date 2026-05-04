@@ -3,13 +3,13 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>TabTidy 상세 분석</title>
+    <title>TabTidy 탭 정리</title>
     <link rel="stylesheet" href="dashboard.css">
   </head>
   <body>
     <header class="app-header">
       <div>
-        <p class="eyebrow">TabTidy Dashboard</p>
+        <p class="eyebrow">TabTidy</p>
         <h1>빠른 탭 정리 대시보드</h1>
         <p class="header-copy">현재 창의 탭 상태를 보고, 닫을 탭을 미리 확인한 뒤 안전하게 정리합니다.</p>
       </div>
@@ -36,11 +36,11 @@
         <section class="overview-section" aria-label="탭 정리 필요도 요약">
           <div class="score-panel">
             <div class="score-header">
-              <span class="score-label">탭 정리 필요도 지표</span>
+              <span class="score-label">정리 필요도</span>
               <span id="scoreStatusBadge" class="badge badge-good">양호</span>
             </div>
             <strong id="overallScore">0</strong>
-            <p id="scoreDescription">점수는 절대 평가가 아니라 탭 작업공간의 정리 필요도를 보여주는 UX 지표입니다.</p>
+            <p id="scoreDescription">정리 필요도를 보여주는 참고 점수입니다.</p>
           </div>
 
           <div class="summary-panel" aria-label="빠른 정리 요약">
@@ -50,26 +50,28 @@
                 <strong id="totalTabs">0</strong>
               </article>
               <article class="metric metric-primary">
-                <span>정리 후보</span>
+                <span>닫을 탭</span>
                 <strong id="cleanupCandidateMetric">0</strong>
               </article>
               <article class="metric metric-primary">
-                <span>보호 탭</span>
+                <span>보호된 탭</span>
                 <strong id="protectedTabs">0</strong>
               </article>
             </div>
 
-            <div class="secondary-metric-grid">
+            <details class="summary-details">
+            <summary>보조 정보 보기</summary>
+              <div class="secondary-metric-grid">
               <article class="mini-stat">
-                <span>그룹 탭</span>
+                <span>그룹 안 탭</span>
                 <strong id="groupedTabs">0</strong>
               </article>
               <article class="mini-stat">
-                <span>비그룹 탭</span>
+                <span>그룹 밖 탭</span>
                 <strong id="ungroupedTabs">0</strong>
               </article>
               <article class="mini-stat">
-                <span>탭 그룹</span>
+                <span>그룹 수</span>
                 <strong id="groupCount">0</strong>
               </article>
               <article class="mini-stat">
@@ -80,7 +82,8 @@
                 <span>검색 결과</span>
                 <strong id="searchTabs">0</strong>
               </article>
-            </div>
+              </div>
+            </details>
           </div>
         </section>
 
@@ -90,21 +93,22 @@
               <h2>정리하기</h2>
               <p>정리 전 미리보기에서 닫을 탭을 먼저 확인합니다. 선택한 탭만 확인 후 닫습니다.</p>
             </div>
-            <span id="cleanupSummary" class="pill">0개 후보</span>
+            <span id="cleanupSummary" class="pill">0개 닫기 가능</span>
           </div>
 
           <div id="cleanupTypeSummary" class="cleanup-type-summary" aria-live="polite"></div>
 
           <details id="cleanupCandidatesDetails" class="inner-details" open>
-            <summary>후보 선택 목록</summary>
+            <summary>닫을 탭 선택</summary>
             <div id="cleanupCandidatesList" class="cleanup-candidate-list"></div>
           </details>
 
           <div class="cleanup-actions">
             <button id="previewCleanupButton" class="primary-action-button" type="button" disabled>정리 미리보기</button>
+            <button id="resetManualCleanupButton" class="secondary-button" type="button" disabled>직접 고른 탭 초기화</button>
             <button id="undoCleanupButton" class="secondary-button" type="button" disabled>마지막 정리 되돌리기</button>
           </div>
-          <p id="undoStatusMessage" class="helper-note">되돌리기는 닫힌 탭의 URL을 다시 여는 기능입니다. 입력값, 스크롤 위치, 웹앱 상태까지 복구하지는 않습니다.</p>
+          <p id="undoStatusMessage" class="helper-note">되돌리기는 방금 닫은 탭의 주소를 다시 여는 기능입니다. 페이지 안에 입력한 내용이나 스크롤 위치까지 복구되지는 않습니다.</p>
 
           <section id="cleanupPreviewPanel" class="cleanup-panel is-hidden" aria-live="polite">
             <div class="section-heading">
@@ -130,7 +134,7 @@
             </div>
             <div id="previewCloseList" class="tab-list"></div>
             <div class="cleanup-actions">
-              <button id="executeCleanupButton" class="danger-action-button" type="button">정리 실행</button>
+              <button id="executeCleanupButton" class="danger-action-button" type="button">선택한 탭 닫기</button>
               <button id="cancelCleanupPreviewButton" class="secondary-button" type="button">취소</button>
             </div>
           </section>
@@ -162,7 +166,7 @@
         <details id="ungroupedSection" class="analysis-section accordion-section">
           <summary class="accordion-summary">
             <div>
-              <h2>비그룹 탭</h2>
+              <h2>그룹 밖 탭</h2>
               <p id="ungroupedMessage">아직 어떤 Chrome 탭 그룹에도 들어가지 않은 탭입니다.</p>
             </div>
             <span id="ungroupedSummary" class="pill">0개 탭</span>
@@ -174,10 +178,15 @@
           <summary class="accordion-summary">
             <div>
               <h2>오래 안 본 탭</h2>
-              <p>오래 안 본 탭 분석은 TabTidy 설치 이후부터 정확해져. 지금부터 탭 사용 기록을 추적해.</p>
+              <p>오래 안 본 탭 분석은 TabTidy 설치 이후부터 정확해집니다. 지금부터 탭 사용 기록을 추적합니다.</p>
             </div>
             <span id="staleSummary" class="pill">0개 탭</span>
           </summary>
+          <div class="stale-toolbar" aria-label="오래 안 본 탭 기준 필터">
+            <button class="filter-button" type="button" data-stale-filter="1">1일+</button>
+            <button class="filter-button is-active" type="button" data-stale-filter="7">7일+</button>
+            <button class="filter-button" type="button" data-stale-filter="30">30일+</button>
+          </div>
           <div id="staleList" class="finding-list"></div>
         </details>
 
@@ -185,7 +194,7 @@
           <summary class="accordion-summary">
             <div>
               <h2>중복 탭</h2>
-              <p>완전히 동일하거나 추적 파라미터 제거 후 같은 URL입니다.</p>
+              <p>완전히 같거나 추적 파라미터를 제거하면 같은 주소입니다.</p>
             </div>
             <span id="duplicatesSummary" class="pill">0개 탭</span>
           </summary>
@@ -206,8 +215,8 @@
         <details id="protectedSection" class="analysis-section accordion-section">
           <summary class="accordion-summary">
             <div>
-              <h2>자동으로 건드리지 않는 탭</h2>
-              <p>고정 탭, 활성 탭, 보호 탭, 브라우저 내부 페이지와 확장 페이지는 닫기 후보에서 제외합니다.</p>
+              <h2>자동으로 닫지 않는 탭</h2>
+              <p>고정된 탭, 현재 보고 있는 탭, 보호한 탭, 브라우저 내부 페이지는 자동으로 닫지 않습니다.</p>
             </div>
             <span id="protectedSummary" class="pill">0개 탭</span>
           </summary>
@@ -223,10 +232,13 @@
             <span id="cleanupHistorySummary" class="pill">0개 기록</span>
           </summary>
           <div class="history-toolbar" aria-label="정리 기록 기간 필터">
-            <button class="filter-button" type="button" data-history-filter="today">오늘</button>
-            <button class="filter-button" type="button" data-history-filter="7">7일</button>
-            <button class="filter-button" type="button" data-history-filter="30">30일</button>
-            <button class="filter-button is-active" type="button" data-history-filter="all">전체</button>
+            <div class="filter-group">
+              <button class="filter-button" type="button" data-history-filter="today">오늘</button>
+              <button class="filter-button" type="button" data-history-filter="7">7일</button>
+              <button class="filter-button" type="button" data-history-filter="30">30일</button>
+              <button class="filter-button is-active" type="button" data-history-filter="all">전체</button>
+            </div>
+            <button id="clearCleanupHistoryButton" class="tool-button danger-text-button" type="button">전체 기록 지우기</button>
           </div>
           <div id="cleanupHistoryList" class="finding-list"></div>
         </details>

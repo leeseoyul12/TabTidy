@@ -257,6 +257,24 @@ main {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.summary-details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.summary-details summary {
+  padding: 10px 11px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.summary-details .secondary-metric-grid {
+  padding: 0 10px 10px;
+}
+
 .metric-grid {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
@@ -718,11 +736,20 @@ main {
   overflow-wrap: anywhere;
 }
 
+.stale-toolbar,
 .history-toolbar {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   padding: 14px 16px 0;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .filter-button {
@@ -741,6 +768,24 @@ main {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+.danger-text-button {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.danger-text-button:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.history-card-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .history-grid {

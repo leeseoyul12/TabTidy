@@ -69,6 +69,7 @@ var elements = {
   cleanupCandidatesDetails: document.getElementById("cleanupCandidatesDetails"),
   cleanupCandidatesList: document.getElementById("cleanupCandidatesList"),
   previewCleanupButton: document.getElementById("previewCleanupButton"),
+  resetManualCleanupButton: document.getElementById("resetManualCleanupButton"),
   undoCleanupButton: document.getElementById("undoCleanupButton"),
   cleanupPreviewPanel: document.getElementById("cleanupPreviewPanel"),
   previewCloseCount: document.getElementById("previewCloseCount"),
@@ -86,6 +87,7 @@ var elements = {
   undoStatusMessage: document.getElementById("undoStatusMessage"),
   cleanupHistorySummary: document.getElementById("cleanupHistorySummary"),
   cleanupHistoryList: document.getElementById("cleanupHistoryList"),
+  clearCleanupHistoryButton: document.getElementById("clearCleanupHistoryButton"),
   groupsSection: document.getElementById("groupsSection"),
   ungroupedSection: document.getElementById("ungroupedSection"),
   staleSection: document.getElementById("staleSection"),
@@ -96,6 +98,12 @@ var elements = {
 };
 var currentAnalysis = null;
 var cleanupHistoryFilter = "all";
+var staleFilterDays = 7;
+var hasRenderedAnalysis = false;
+var openNotePanelIds = new Set();
+var manualCleanupTabIds = new Set();
+var manualCleanupPreviousSelections = {};
+var cleanupSelectionOverrides = {};
 var cleanupState = {
   candidates: [],
   previewCandidates: [],
@@ -105,13 +113,25 @@ var cleanupState = {
 document.addEventListener("DOMContentLoaded", function handleReady() {
   elements.refreshButton.addEventListener("click", renderDashboard);
   elements.previewCleanupButton.addEventListener("click", renderCleanupPreview);
+  elements.resetManualCleanupButton.addEventListener("click", resetManualCleanupSelection);
   elements.executeCleanupButton.addEventListener("click", executeCleanup);
   elements.cancelCleanupPreviewButton.addEventListener("click", cancelCleanupPreview);
   elements.undoCleanupButton.addEventListener("click", undoLastCleanup);
+  elements.clearCleanupHistoryButton.addEventListener("click", clearCleanupHistory);
   Array.from(document.querySelectorAll("[data-history-filter]")).forEach(function bindHistoryFilter(button) {
     button.addEventListener("click", function handleHistoryFilterClick() {
       cleanupHistoryFilter = button.getAttribute("data-history-filter") || "all";
       renderCleanupHistory();
+    });
+  });
+  Array.from(document.querySelectorAll("[data-stale-filter]")).forEach(function bindStaleFilter(button) {
+    button.addEventListener("click", function handleStaleFilterClick() {
+      staleFilterDays = Number(button.getAttribute("data-stale-filter")) || 7;
+      syncStaleFilterButtons();
+
+      if (currentAnalysis) {
+        renderAnalysis(currentAnalysis);
+      }
     });
   });
   renderDashboard();
@@ -367,7 +387,7 @@ function findDuplicateTabs(tabs) {
 
     duplicateGroups.push({
       type: "exact",
-      label: "완전히 동일한 URL",
+      label: "완전히 같은 주소",
       key: key,
       tabs: groupTabs
     });
@@ -385,7 +405,7 @@ function findDuplicateTabs(tabs) {
 
     duplicateGroups.push({
       type: "normalized",
-      label: "추적 파라미터 제거 후 동일한 URL",
+      label: "추적 파라미터 제거 후 같은 주소",
       key: key,
       tabs: groupTabs
     });
@@ -400,8 +420,7 @@ function findDuplicateTabs(tabs) {
 
 function findStaleTabs(tabs, tabMetaById) {
   var now = Date.now();
-  var staleThreeDays = [];
-  var staleSevenDays = [];
+  var staleItems = [];
 
   tabs.forEach(function inspectTab(tab) {
     var meta = tabMetaById[tab.id] || mergeMetaForCurrentTab(tab, null);
@@ -419,20 +438,16 @@ function findStaleTabs(tabs, tabMetaById) {
       lastSeenAt: lastSeenAt
     };
 
-    if (ageDays >= 7) {
-      staleSevenDays.push(item);
-    } else if (ageDays >= 3) {
-      staleThreeDays.push(item);
+    if (ageDays >= 1) {
+      staleItems.push(item);
     }
   });
 
-  staleSevenDays.sort(sortByAgeDesc);
-  staleThreeDays.sort(sortByAgeDesc);
+  staleItems.sort(sortByAgeDesc);
 
   return {
-    threeDays: staleThreeDays,
-    sevenDays: staleSevenDays,
-    total: staleThreeDays.length + staleSevenDays.length
+    items: staleItems,
+    total: staleItems.length
   };
 }
 
@@ -466,14 +481,16 @@ function groupUngroupedTabsByDomain(ungroupedTabs) {
 }
 
 function renderAnalysis(analysis) {
+  var previousUiState = hasRenderedAnalysis ? captureUiState() : null;
   var scoreStatus = getHealthBadgeText(analysis.overallScore);
   var protectedCount = getProtectedTabCount(analysis);
   var excludedTabs = getAutomaticExcludedTabs(analysis);
+  var filteredStaleItems = getFilteredStaleItems(analysis.staleAnalysis);
 
   elements.overallScore.textContent = String(analysis.overallScore);
   elements.scoreStatusBadge.textContent = scoreStatus;
   elements.scoreStatusBadge.className = "badge " + getScoreBadgeClass(analysis.overallScore);
-  elements.scoreDescription.textContent = "점수는 절대 평가가 아니라 탭 작업공간의 정리 필요도를 보여주는 UX 지표입니다.";
+  elements.scoreDescription.textContent = "정리 필요도를 보여주는 참고 점수입니다.";
   elements.totalTabs.textContent = String(analysis.tabs.length);
   elements.groupedTabs.textContent = String(analysis.groupedTabs.length);
   elements.ungroupedTabs.textContent = String(analysis.ungroupedTabs.length);
@@ -487,7 +504,7 @@ function renderAnalysis(analysis) {
   elements.duplicatesSummary.textContent = analysis.duplicateTabIds.size + "개 탭";
   elements.searchSummary.textContent = analysis.searchTabs.length + "개 탭";
   elements.protectedSummary.textContent = excludedTabs.length + "개 탭";
-  elements.staleSummary.textContent = analysis.staleAnalysis.total + "개 탭";
+  elements.staleSummary.textContent = filteredStaleItems.length + "개 표시 / " + analysis.staleAnalysis.total + "개 추적";
   elements.ungroupedMessage.textContent = getUngroupedMessage(analysis.ungroupedTabs.length);
 
   updateAccordionDefaults(analysis, excludedTabs);
@@ -500,6 +517,8 @@ function renderAnalysis(analysis) {
   renderCleanupSection(analysis);
   renderCleanupHistory();
   refreshUndoButtonState();
+  restoreUiState(previousUiState);
+  hasRenderedAnalysis = true;
 }
 
 function updateAccordionDefaults(analysis, excludedTabs) {
@@ -507,13 +526,41 @@ function updateAccordionDefaults(analysis, excludedTabs) {
   elements.ungroupedSection.open = false;
   elements.protectedSection.open = false;
   elements.historySection.open = false;
-  elements.staleSection.open = analysis.staleAnalysis.total > 0;
+  elements.staleSection.open = getFilteredStaleItems(analysis.staleAnalysis).length > 0;
   elements.duplicatesSection.open = analysis.duplicateTabIds.size > 0;
   elements.searchSection.open = analysis.searchTabs.length > 0;
 
   if (!excludedTabs.length) {
     elements.protectedSection.open = false;
   }
+}
+
+function captureUiState() {
+  return {
+    groupsSectionOpen: elements.groupsSection.open,
+    ungroupedSectionOpen: elements.ungroupedSection.open,
+    staleSectionOpen: elements.staleSection.open,
+    duplicatesSectionOpen: elements.duplicatesSection.open,
+    searchSectionOpen: elements.searchSection.open,
+    protectedSectionOpen: elements.protectedSection.open,
+    historySectionOpen: elements.historySection.open,
+    cleanupCandidatesDetailsOpen: elements.cleanupCandidatesDetails.open
+  };
+}
+
+function restoreUiState(state) {
+  if (!state) {
+    return;
+  }
+
+  elements.groupsSection.open = state.groupsSectionOpen;
+  elements.ungroupedSection.open = state.ungroupedSectionOpen;
+  elements.staleSection.open = state.staleSectionOpen;
+  elements.duplicatesSection.open = state.duplicatesSectionOpen;
+  elements.searchSection.open = state.searchSectionOpen;
+  elements.protectedSection.open = state.protectedSectionOpen;
+  elements.historySection.open = state.historySectionOpen;
+  elements.cleanupCandidatesDetails.open = state.cleanupCandidatesDetailsOpen;
 }
 
 function renderGroups(groups, analysis) {
@@ -555,7 +602,7 @@ function renderGroups(groups, analysis) {
     }
 
     group.tabs.forEach(function appendTab(tab) {
-      tabsWrap.appendChild(createTabRow(tab, analysis));
+      tabsWrap.appendChild(createTabRow(tab, analysis, "", { allowManualCleanup: true }));
     });
 
     card.appendChild(header);
@@ -568,7 +615,7 @@ function renderUngroupedDomainGroups(domainGroups, analysis) {
   clearElement(elements.ungroupedList);
 
   if (!domainGroups.length) {
-    elements.ungroupedList.appendChild(createEmptyNote("비그룹 탭이 없습니다."));
+    elements.ungroupedList.appendChild(createEmptyNote("그룹 밖 탭이 없습니다."));
     return;
   }
 
@@ -577,7 +624,7 @@ function renderUngroupedDomainGroups(domainGroups, analysis) {
     var header = createElement("div", "finding-card-header");
     var titleBlock = createElement("div");
     var title = createElement("p", "finding-title", domainGroup.domain);
-    var key = createElement("p", "finding-key", "비그룹 탭 도메인 묶음");
+    var key = createElement("p", "finding-key", "그룹 밖 탭 도메인 묶음");
     var badge = createElement("span", "badge", domainGroup.tabs.length + "개 탭");
     var list = createElement("div", "tab-list");
 
@@ -587,7 +634,7 @@ function renderUngroupedDomainGroups(domainGroups, analysis) {
     header.appendChild(badge);
 
     domainGroup.tabs.forEach(function appendTab(tab) {
-      list.appendChild(createTabRow(tab, analysis));
+      list.appendChild(createTabRow(tab, analysis, "", { allowManualCleanup: true }));
     });
 
     card.appendChild(header);
@@ -610,14 +657,16 @@ function getUngroupedMessage(ungroupedCount) {
 
 function renderStaleTabs(staleAnalysis, analysis) {
   clearElement(elements.staleList);
+  syncStaleFilterButtons();
 
-  if (!staleAnalysis.total) {
-    elements.staleList.appendChild(createEmptyNote("아직 3일 이상 안 본 현재 창 탭이 없습니다."));
+  var filteredItems = getFilteredStaleItems(staleAnalysis);
+
+  if (!filteredItems.length) {
+    elements.staleList.appendChild(createEmptyNote("선택한 기준에 해당하는 오래 안 본 현재 창 탭이 없습니다."));
     return;
   }
 
-  appendStaleBucket("7일 이상 안 본 탭", staleAnalysis.sevenDays, analysis);
-  appendStaleBucket("3일 이상 안 본 탭", staleAnalysis.threeDays, analysis);
+  appendStaleBucket(staleFilterDays + "일 이상 안 본 탭", filteredItems, analysis);
 }
 
 function appendStaleBucket(titleText, items, analysis) {
@@ -707,25 +756,32 @@ function renderProtectedTabs(protectedTabs, analysis) {
 }
 
 function renderCleanupSection(analysis) {
+  syncManualCleanupSelections(analysis);
+
   var cleanupPlan = buildCleanupPlan(analysis);
+  var selectableCandidates = cleanupPlan.candidates.filter(function isSelectableCandidate(candidate) {
+    return candidate.selectable;
+  });
+
   cleanupState.candidates = cleanupPlan.candidates;
   cleanupState.previewCandidates = [];
 
-  elements.cleanupSummary.textContent = cleanupPlan.selectableCount + "개 선택 가능";
+  elements.cleanupSummary.textContent = cleanupPlan.selectableCount + "개 닫기 가능";
   elements.cleanupCandidateMetric.textContent = String(cleanupPlan.selectableCount);
+  elements.resetManualCleanupButton.disabled = cleanupState.isBusy || cleanupPlan.manualSelectedCount === 0;
   elements.cleanupPreviewPanel.classList.add("is-hidden");
   elements.cleanupResultPanel.classList.add("is-hidden");
   clearElement(elements.cleanupCandidatesList);
   renderCleanupTypeSummary(cleanupPlan);
-  elements.cleanupCandidatesDetails.open = cleanupPlan.selectableCount > 0;
+  elements.cleanupCandidatesDetails.open = selectableCandidates.length > 0;
 
-  if (!cleanupPlan.candidates.length) {
-    elements.cleanupCandidatesList.appendChild(createEmptyNote("정리할 탭이 거의 없습니다. 현재 상태는 양호합니다."));
+  if (!selectableCandidates.length) {
+    elements.cleanupCandidatesList.appendChild(createEmptyNote("정리할 탭이 거의 없습니다. 현재 창은 깔끔한 상태입니다. 중복 탭이나 오래 안 본 탭이 생기면 이곳에서 정리할 수 있습니다."));
     updateCleanupButtons();
     return;
   }
 
-  cleanupPlan.candidates.forEach(function appendCandidate(candidate) {
+  selectableCandidates.forEach(function appendCandidate(candidate) {
     elements.cleanupCandidatesList.appendChild(createCleanupCandidateRow(candidate));
   });
 
@@ -747,7 +803,7 @@ function buildCleanupPlan(analysis) {
     });
   });
 
-  analysis.staleAnalysis.sevenDays.concat(analysis.staleAnalysis.threeDays).forEach(function collectStale(item) {
+  getFilteredStaleItems(analysis.staleAnalysis).forEach(function collectStale(item) {
     addCleanupCandidate(candidateMap, item.tab, "오래 안 본 탭", false, analysis);
   });
 
@@ -759,14 +815,31 @@ function buildCleanupPlan(analysis) {
     addCleanupCandidate(candidateMap, item.tab, "보호 탭", false, analysis);
   });
 
+  analysis.tabs.forEach(function collectManual(tab) {
+    if (manualCleanupTabIds.has(tab.id)) {
+      addManualCleanupCandidate(candidateMap, tab, analysis);
+    }
+  });
+
   var candidates = Array.from(candidateMap.values()).sort(sortCleanupCandidates);
+
+  candidates.forEach(function applySelectionOverride(candidate) {
+    if (Object.prototype.hasOwnProperty.call(cleanupSelectionOverrides, String(candidate.tabId))) {
+      candidate.selected = Boolean(cleanupSelectionOverrides[String(candidate.tabId)]);
+    }
+  });
+
   var selectableCount = candidates.filter(function isSelectable(candidate) {
     return candidate.selectable;
+  }).length;
+  var manualSelectedCount = candidates.filter(function isManualSelected(candidate) {
+    return candidate.selectable && candidate.manualSelected;
   }).length;
 
   return {
     candidates: candidates,
     selectableCount: selectableCount,
+    manualSelectedCount: manualSelectedCount,
     selectedCount: candidates.filter(isSelectedCleanupCandidate).length,
     excludedCount: candidates.filter(function isExcluded(candidate) {
       return !candidate.selectable;
@@ -784,7 +857,7 @@ function renderCleanupTypeSummary(cleanupPlan) {
     elements.cleanupTypeSummary.appendChild(createElement(
       "p",
       "cleanup-ready-note",
-      "정리할 탭이 거의 없습니다. 현재 상태는 양호합니다."
+      "정리할 탭이 거의 없습니다. 현재 창은 깔끔한 상태입니다. 중복 탭이나 오래 안 본 탭이 생기면 이곳에서 정리할 수 있습니다."
     ));
     return;
   }
@@ -792,7 +865,8 @@ function renderCleanupTypeSummary(cleanupPlan) {
   [
     ["중복 탭", sourceCounts.duplicate],
     ["오래 안 본 탭", sourceCounts.stale],
-    ["검색 결과 탭", sourceCounts.search]
+    ["검색 결과 탭", sourceCounts.search],
+    ["직접 고른 탭", cleanupPlan.manualSelectedCount]
   ].forEach(function appendSummary(item) {
     var summary = createElement("article", "cleanup-type-card");
     summary.appendChild(createElement("span", "", item[0]));
@@ -831,6 +905,20 @@ function countCleanupSources(candidates) {
   return counts;
 }
 
+function getFilteredStaleItems(staleAnalysis) {
+  var items = staleAnalysis && Array.isArray(staleAnalysis.items) ? staleAnalysis.items : [];
+
+  return items.filter(function isOlderThanFilter(item) {
+    return item.ageDays >= staleFilterDays;
+  });
+}
+
+function syncStaleFilterButtons() {
+  Array.from(document.querySelectorAll("[data-stale-filter]")).forEach(function syncButton(button) {
+    button.classList.toggle("is-active", Number(button.getAttribute("data-stale-filter")) === staleFilterDays);
+  });
+}
+
 function addCleanupCandidate(candidateMap, tab, sourceLabel, defaultSelected, analysis) {
   if (!tab || typeof tab.id !== "number") {
     return;
@@ -845,6 +933,7 @@ function addCleanupCandidate(candidateMap, tab, sourceLabel, defaultSelected, an
       tabId: tab.id,
       tab: tab,
       sources: [],
+      manualSelected: false,
       selectable: !exclusionReason,
       disabledReason: exclusionReason,
       selected: !exclusionReason && Boolean(defaultSelected)
@@ -859,6 +948,135 @@ function addCleanupCandidate(candidateMap, tab, sourceLabel, defaultSelected, an
   if (!existing.disabledReason && defaultSelected) {
     existing.selected = true;
   }
+}
+
+function addManualCleanupCandidate(candidateMap, tab, analysis) {
+  if (!tab || typeof tab.id !== "number") {
+    return;
+  }
+
+  var key = String(tab.id);
+  var existing = candidateMap.get(key);
+  var exclusionReason = getManualCloseExclusionReason(tab, analysis);
+
+  if (!existing) {
+    existing = {
+      tabId: tab.id,
+      tab: tab,
+      sources: [],
+      manualSelected: true,
+      selectable: !exclusionReason,
+      disabledReason: exclusionReason,
+      selected: !exclusionReason
+    };
+    candidateMap.set(key, existing);
+  } else {
+    existing.manualSelected = true;
+
+    if (!exclusionReason) {
+      existing.selectable = true;
+      existing.disabledReason = "";
+      existing.selected = true;
+    }
+  }
+
+  if (existing.sources.indexOf("직접 고른 탭") === -1) {
+    existing.sources.push("직접 고른 탭");
+  }
+}
+
+function syncManualCleanupSelections(analysis) {
+  var currentTabsById = new Map();
+
+  analysis.tabs.forEach(function mapCurrentTab(tab) {
+    currentTabsById.set(tab.id, tab);
+  });
+
+  Array.from(manualCleanupTabIds).forEach(function removeMissingTab(tabId) {
+    var tab = currentTabsById.get(tabId);
+
+    if (!tab || getManualCloseExclusionReason(tab, analysis)) {
+      manualCleanupTabIds.delete(tabId);
+      restorePreviousCleanupSelection(String(tabId));
+    }
+  });
+}
+
+function resetManualCleanupSelection() {
+  Array.from(manualCleanupTabIds).forEach(function restoreManualTab(tabId) {
+    restorePreviousCleanupSelection(String(tabId));
+  });
+  manualCleanupTabIds.clear();
+  cleanupState.previewCandidates = [];
+  elements.cleanupPreviewPanel.classList.add("is-hidden");
+
+  if (currentAnalysis) {
+    renderAnalysis(currentAnalysis);
+  }
+}
+
+function toggleManualCleanupSelection(tab) {
+  if (!currentAnalysis || !tab || typeof tab.id !== "number") {
+    return;
+  }
+
+  var reason = getManualCloseExclusionReason(tab, currentAnalysis);
+
+  if (reason) {
+    return;
+  }
+
+  if (manualCleanupTabIds.has(tab.id)) {
+    manualCleanupTabIds.delete(tab.id);
+    restorePreviousCleanupSelection(String(tab.id));
+  } else {
+    rememberPreviousCleanupSelection(tab.id);
+    manualCleanupTabIds.add(tab.id);
+    cleanupSelectionOverrides[String(tab.id)] = true;
+  }
+
+  cleanupState.previewCandidates = [];
+  elements.cleanupPreviewPanel.classList.add("is-hidden");
+  renderAnalysis(currentAnalysis);
+}
+
+function rememberPreviousCleanupSelection(tabId) {
+  var key = String(tabId);
+
+  if (Object.prototype.hasOwnProperty.call(manualCleanupPreviousSelections, key)) {
+    return;
+  }
+
+  var currentCandidate = cleanupState.candidates.find(function findCandidate(candidate) {
+    return String(candidate.tabId) === key;
+  });
+
+  if (currentCandidate) {
+    manualCleanupPreviousSelections[key] = Boolean(currentCandidate.selected);
+    return;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(cleanupSelectionOverrides, key)) {
+    manualCleanupPreviousSelections[key] = Boolean(cleanupSelectionOverrides[key]);
+    return;
+  }
+
+  manualCleanupPreviousSelections[key] = null;
+}
+
+function restorePreviousCleanupSelection(key) {
+  if (!Object.prototype.hasOwnProperty.call(manualCleanupPreviousSelections, key)) {
+    delete cleanupSelectionOverrides[key];
+    return;
+  }
+
+  if (typeof manualCleanupPreviousSelections[key] === "boolean") {
+    cleanupSelectionOverrides[key] = manualCleanupPreviousSelections[key];
+  } else {
+    delete cleanupSelectionOverrides[key];
+  }
+
+  delete manualCleanupPreviousSelections[key];
 }
 
 function chooseDuplicateKeepTab(tabs, analysis) {
@@ -899,7 +1117,7 @@ function createCleanupCandidateRow(candidate) {
   var body = createElement("div", "tab-main");
   var title = createElement("p", "tab-title", candidate.tab.title || "제목 없는 탭");
   var url = createElement("p", "tab-url", extractDomain(candidate.tab.url));
-  var meta = createElement("p", "tab-meta", extractDomain(candidate.tab.url) + " · " + candidate.sources.join(", "));
+  var meta = createElement("p", "tab-meta", candidate.sources.join(", "));
   var noteMeta = getTabMeta(candidate.tab);
   var badges = createElement("div", "tab-badges");
 
@@ -907,7 +1125,7 @@ function createCleanupCandidateRow(candidate) {
   checkbox.className = "cleanup-checkbox";
   checkbox.checked = candidate.selected;
   checkbox.disabled = !candidate.selectable || cleanupState.isBusy;
-  checkbox.setAttribute("aria-label", (candidate.tab.title || "제목 없는 탭") + " 닫기 후보 선택");
+  checkbox.setAttribute("aria-label", (candidate.tab.title || "제목 없는 탭") + " 닫을 탭 선택");
 
   if (candidate.selected) {
     row.classList.add("is-selected");
@@ -915,9 +1133,9 @@ function createCleanupCandidateRow(candidate) {
 
   if (!candidate.selectable) {
     row.classList.add("is-disabled");
-    badges.appendChild(createElement("span", "badge badge-protected", candidate.disabledReason || "닫기 제외"));
+    badges.appendChild(createElement("span", "badge badge-protected", candidate.disabledReason || "닫지 않음"));
   } else {
-    badges.appendChild(createElement("span", "badge badge-danger", "닫기 후보"));
+    badges.appendChild(createElement("span", "badge badge-danger", "닫을 탭"));
   }
 
   candidate.sources.forEach(function appendSource(source) {
@@ -934,6 +1152,7 @@ function createCleanupCandidateRow(candidate) {
 
   checkbox.addEventListener("change", function handleCandidateChange() {
     candidate.selected = checkbox.checked;
+    cleanupSelectionOverrides[String(candidate.tabId)] = checkbox.checked;
     row.classList.toggle("is-selected", candidate.selected);
     elements.cleanupPreviewPanel.classList.add("is-hidden");
     cleanupState.previewCandidates = [];
@@ -952,16 +1171,21 @@ function createCleanupCandidateRow(candidate) {
 
 function renderCleanupPreview() {
   var selectedCandidates = getSelectedCleanupCandidates();
+  var directCandidates = selectedCandidates.filter(function isDirectCandidate(candidate) {
+    return candidate.manualSelected;
+  });
+  var automaticCandidates = selectedCandidates.filter(function isAutomaticCandidate(candidate) {
+    return !candidate.manualSelected;
+  });
 
   cleanupState.previewCandidates = selectedCandidates;
   clearElement(elements.previewCloseList);
 
   if (!selectedCandidates.length) {
-    elements.previewCloseList.appendChild(createEmptyNote("선택된 닫기 후보가 없습니다."));
+    elements.previewCloseList.appendChild(createEmptyNote("선택된 탭이 없습니다."));
   } else {
-    selectedCandidates.forEach(function appendPreview(candidate) {
-      elements.previewCloseList.appendChild(createTabRow(candidate.tab, currentAnalysis, candidate.sources.join(", ")));
-    });
+    appendPreviewCandidateBucket("직접 고른 탭", directCandidates);
+    appendPreviewCandidateBucket("자동으로 찾은 탭", automaticCandidates);
   }
 
   elements.previewCloseCount.textContent = selectedCandidates.length + "개 닫기";
@@ -971,6 +1195,33 @@ function renderCleanupPreview() {
   elements.cleanupPreviewPanel.classList.remove("is-hidden");
   elements.cleanupResultPanel.classList.add("is-hidden");
   updateCleanupButtons();
+}
+
+function appendPreviewCandidateBucket(titleText, candidates) {
+  if (!candidates.length) {
+    return;
+  }
+
+  var card = createElement("article", "finding-card");
+  var header = createElement("div", "finding-card-header");
+  var titleBlock = createElement("div");
+  var title = createElement("p", "finding-title", titleText);
+  var key = createElement("p", "finding-key", "미리보기와 최종 확인 후 닫습니다.");
+  var badge = createElement("span", "badge badge-danger", candidates.length + "개 닫기");
+  var list = createElement("div", "tab-list");
+
+  titleBlock.appendChild(title);
+  titleBlock.appendChild(key);
+  header.appendChild(titleBlock);
+  header.appendChild(badge);
+
+  candidates.forEach(function appendPreview(candidate) {
+    list.appendChild(createTabRow(candidate.tab, currentAnalysis, candidate.sources.join(", ")));
+  });
+
+  card.appendChild(header);
+  card.appendChild(list);
+  elements.previewCloseList.appendChild(card);
 }
 
 function cancelCleanupPreview() {
@@ -985,7 +1236,7 @@ async function executeCleanup() {
   }
 
   var selectedCandidates = cleanupState.previewCandidates.slice();
-  var confirmationMessage = "선택한 탭 " + selectedCandidates.length + "개를 닫을까요?";
+  var confirmationMessage = "선택한 탭 " + selectedCandidates.length + "개를 닫으시겠습니까?";
 
   if (!window.confirm(confirmationMessage)) {
     return;
@@ -1060,15 +1311,17 @@ async function closeSelectedTabs(candidates) {
         continue;
       }
 
-      var exclusionReason = getLiveCloseExclusionReason(liveTab);
+      var exclusionReason = candidate.manualSelected
+        ? getLiveManualCloseExclusionReason(liveTab, tabMeta)
+        : getLiveCloseExclusionReason(liveTab);
 
       if (exclusionReason) {
-        failures.push(createCloseFailure(liveTab, "닫기 직전 제외: " + exclusionReason));
+        failures.push(createCloseFailure(liveTab, "닫기 전 제외: " + exclusionReason));
         continue;
       }
 
       if (tabMeta[String(liveTab.id)] && tabMeta[String(liveTab.id)].isProtected) {
-        failures.push(createCloseFailure(liveTab, "닫기 직전 제외: 사용자 보호 탭"));
+        failures.push(createCloseFailure(liveTab, "닫기 전 제외: 보호한 탭"));
         continue;
       }
 
@@ -1114,9 +1367,9 @@ async function undoLastCleanup() {
     snapshot.undoUsed = true;
     await writeStorageItems(createStoragePayload(LAST_CLEANUP_KEY, snapshot));
     await renderDashboard();
-    showUndoMessage("닫은 탭을 다시 열었어. 다시 연 탭 " + reopenedCount + "개");
+    showUndoMessage("닫은 탭 주소를 다시 열었습니다. 다시 연 탭 " + reopenedCount + "개");
   } catch (error) {
-    showUndoMessage(error && error.message ? error.message : "Undo 실행 중 오류가 발생했습니다.");
+    showUndoMessage(error && error.message ? error.message : "되돌리기 실행 중 오류가 발생했습니다.");
   } finally {
     setCleanupBusy(false);
     refreshUndoButtonState();
@@ -1124,12 +1377,15 @@ async function undoLastCleanup() {
 }
 
 function renderCleanupResult(historyEntry, failures) {
+  var failureCount = Array.isArray(failures) ? failures.length : 0;
+
   elements.cleanupResultPanel.classList.remove("is-hidden");
   elements.cleanupResultSummary.textContent = historyEntry.closedCount + "개 닫음";
   elements.cleanupResultMessage.textContent =
-    "전체 탭 " + historyEntry.beforeTabCount + "개에서 " + historyEntry.afterTabCount + "개로 정리했습니다. " +
-    "건강 점수는 " + historyEntry.beforeScore + "점에서 " + historyEntry.afterScore + "점입니다. " +
-    "보호한 탭은 " + historyEntry.protectedCount + "개입니다.";
+    "정리가 완료되었습니다. 닫은 탭 " + historyEntry.closedCount + "개" +
+    (failureCount ? ", 닫지 못한 탭 " + failureCount + "개" : "") + ". " +
+    "보호된 탭 " + historyEntry.protectedCount + "개는 유지되었습니다. " +
+    "필요하면 되돌리기로 방금 닫은 탭 주소를 다시 열 수 있습니다.";
   clearElement(elements.cleanupFailureList);
 
   if (!failures.length) {
@@ -1141,7 +1397,7 @@ function renderCleanupResult(historyEntry, failures) {
     var row = createElement("article", "tab-row");
     var main = createElement("div", "tab-main");
     var title = createElement("p", "tab-title", failure.title || "제목 없는 탭");
-    var url = createElement("p", "tab-url", failure.url || "URL 없음");
+    var url = createElement("p", "tab-url", failure.url || "주소 없음");
     var meta = createElement("p", "tab-meta", failure.reason);
     var badges = createElement("div", "tab-badges");
 
@@ -1172,6 +1428,7 @@ async function renderCleanupHistory() {
 
   if (!Array.isArray(history) || !history.length) {
     elements.cleanupHistorySummary.textContent = "0개 기록";
+    elements.clearCleanupHistoryButton.disabled = true;
     elements.cleanupHistoryList.appendChild(createEmptyNote("아직 정리 기록이 없습니다."));
     return;
   }
@@ -1179,6 +1436,7 @@ async function renderCleanupHistory() {
   var recentHistory = history.slice(0, CLEANUP_HISTORY_LIMIT);
   var filteredHistory = filterCleanupHistory(recentHistory);
 
+  elements.clearCleanupHistoryButton.disabled = false;
   elements.cleanupHistorySummary.textContent = getCleanupHistorySummaryText(filteredHistory.length, recentHistory.length);
 
   if (!filteredHistory.length) {
@@ -1197,20 +1455,29 @@ function createCleanupHistoryCard(entry) {
   var titleBlock = createElement("div");
   var title = createElement("p", "finding-title", formatCleanupDate(entry.createdAt));
   var key = createElement("p", "finding-key", "탭 " + entry.beforeTabCount + "개 → " + entry.afterTabCount + "개");
+  var headerActions = createElement("div", "history-card-actions");
   var badge = createElement("span", "badge badge-good", "닫은 탭 " + entry.closedCount + "개");
+  var deleteButton = createElement("button", "tool-button danger-text-button", "기록 지우기");
   var grid = createElement("div", "history-grid");
   var closedTabsDetails = createClosedTabsDetails(entry.closedTabs);
 
+  deleteButton.type = "button";
+  deleteButton.addEventListener("click", function handleDeleteHistoryClick() {
+    deleteCleanupHistoryEntry(entry);
+  });
+
   titleBlock.appendChild(title);
   titleBlock.appendChild(key);
+  headerActions.appendChild(badge);
+  headerActions.appendChild(deleteButton);
   header.appendChild(titleBlock);
-  header.appendChild(badge);
+  header.appendChild(headerActions);
 
   [
     ["닫은 탭", entry.closedCount],
     ["보호 탭", entry.protectedCount],
     ["점수 변화", entry.beforeScore + " → " + entry.afterScore],
-    ["자동 제외", entry.excludedCount]
+    ["건드리지 않은 탭", entry.excludedCount]
   ].forEach(function appendMetric(item) {
     var metric = createElement("article", "history-metric");
     metric.appendChild(createElement("span", "", item[0]));
@@ -1224,19 +1491,57 @@ function createCleanupHistoryCard(entry) {
   return card;
 }
 
+async function deleteCleanupHistoryEntry(entry) {
+  if (!window.confirm("이 정리 기록을 삭제하시겠습니까?")) {
+    return;
+  }
+
+  var history = await readStorageValue(CLEANUP_HISTORY_KEY);
+
+  if (!Array.isArray(history)) {
+    await renderCleanupHistory();
+    return;
+  }
+
+  var targetKey = getCleanupHistoryEntryKey(entry);
+  var nextHistory = history.filter(function keepHistoryItem(item) {
+    return getCleanupHistoryEntryKey(item) !== targetKey;
+  });
+
+  await writeStorageItems(createStoragePayload(CLEANUP_HISTORY_KEY, nextHistory.slice(0, CLEANUP_HISTORY_LIMIT)));
+  await renderCleanupHistory();
+}
+
+async function clearCleanupHistory() {
+  if (!window.confirm("전체 정리 기록을 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) {
+    return;
+  }
+
+  await writeStorageItems(createStoragePayload(CLEANUP_HISTORY_KEY, []));
+  await renderCleanupHistory();
+}
+
+function getCleanupHistoryEntryKey(entry) {
+  if (entry && entry.id) {
+    return "id:" + entry.id;
+  }
+
+  return "createdAt:" + (entry && entry.createdAt ? entry.createdAt : "");
+}
+
 function createClosedTabsDetails(closedTabs) {
   var details = createElement("details", "closed-tabs-details");
   var summary = createElement(
     "summary",
     "",
-    "닫힌 탭 URL 보기"
+    "닫힌 탭 주소 보기"
   );
   var list = createElement("div", "tab-list");
 
   details.appendChild(summary);
 
   if (!Array.isArray(closedTabs) || !closedTabs.length) {
-    list.appendChild(createEmptyNote("기록된 닫힌 탭 URL이 없습니다."));
+    list.appendChild(createEmptyNote("기록된 닫힌 탭 주소가 없습니다."));
   } else {
     closedTabs.forEach(function appendClosedTab(closedTab) {
       var row = createElement("article", "tab-row");
@@ -1328,12 +1633,12 @@ async function refreshUndoButtonState() {
   elements.undoCleanupButton.disabled = cleanupState.isBusy || !canUndo;
 
   if (snapshot && snapshot.undoUsed) {
-    statusMessage = "이미 되돌린 정리야.";
+    statusMessage = "이미 되돌린 정리입니다.";
   } else if (canUndo) {
-    statusMessage = "마지막 정리에서 닫은 탭 " + snapshot.closedTabs.length + "개를 URL로 다시 열 수 있습니다.";
+    statusMessage = "마지막 정리에서 닫은 탭 " + snapshot.closedTabs.length + "개를 주소로 다시 열 수 있습니다.";
   }
 
-  elements.undoStatusMessage.textContent = statusMessage + " 되돌리기는 닫힌 탭의 URL을 다시 여는 기능이며, 입력값/스크롤 위치/웹앱 상태까지 복구하지는 않습니다.";
+  elements.undoStatusMessage.textContent = statusMessage + " 되돌리기는 방금 닫은 탭의 주소를 다시 여는 기능입니다. 페이지 안에 입력한 내용이나 스크롤 위치까지 복구되지는 않습니다.";
 }
 
 function updateCleanupButtons() {
@@ -1341,6 +1646,7 @@ function updateCleanupButtons() {
   var hasPreview = cleanupState.previewCandidates.length > 0;
 
   elements.previewCleanupButton.disabled = cleanupState.isBusy || selectedCount === 0;
+  elements.resetManualCleanupButton.disabled = cleanupState.isBusy || manualCleanupTabIds.size === 0;
   elements.executeCleanupButton.disabled = cleanupState.isBusy || !hasPreview;
   elements.cancelCleanupPreviewButton.disabled = cleanupState.isBusy;
   elements.refreshButton.disabled = cleanupState.isBusy;
@@ -1396,38 +1702,70 @@ function getCloseExclusionReason(tab, analysis) {
   }
 
   if (isTabTidyInternalUrl(tab.url)) {
-    return "TabTidy 내부 페이지";
+    return "TabTidy 화면";
   }
 
   if (tab.pinned) {
-    return "고정 탭";
+    return "고정된 탭";
   }
 
   if (tab.active) {
-    return "현재 활성 탭";
+    return "현재 보고 있는 탭";
   }
 
   if (analysis.tabMetaById[tab.id] && analysis.tabMetaById[tab.id].isProtected) {
-    return "사용자 보호 탭";
+    return "보호한 탭";
   }
 
   return getProtectedReason(tab.url) || "";
 }
 
+function getManualCloseExclusionReason(tab, analysis) {
+  if (!tab || typeof tab.id !== "number") {
+    return "탭 정보 없음";
+  }
+
+  if (analysis.tabMetaById[tab.id] && analysis.tabMetaById[tab.id].isProtected) {
+    return "보호한 탭";
+  }
+
+  if (isCurrentDashboardTab(tab)) {
+    return "현재 TabTidy 화면";
+  }
+
+  return "";
+}
+
 function getLiveCloseExclusionReason(tab) {
   if (isTabTidyInternalUrl(tab.url)) {
-    return "TabTidy 내부 페이지";
+    return "현재 TabTidy 화면";
   }
 
   if (tab.pinned) {
-    return "고정 탭";
+    return "고정된 탭";
   }
 
   if (tab.active) {
-    return "현재 활성 탭";
+    return "현재 보고 있는 탭";
   }
 
   return getProtectedReason(tab.url) || "";
+}
+
+function getLiveManualCloseExclusionReason(tab, tabMeta) {
+  if (!tab || typeof tab.id !== "number") {
+    return "탭 정보 없음";
+  }
+
+  if (tabMeta[String(tab.id)] && tabMeta[String(tab.id)].isProtected) {
+    return "보호한 탭";
+  }
+
+  if (isCurrentDashboardTab(tab)) {
+    return "현재 TabTidy 화면";
+  }
+
+  return "";
 }
 
 function isTabTidyInternalUrl(rawUrl) {
@@ -1436,6 +1774,21 @@ function isTabTidyInternalUrl(rawUrl) {
     var urlText = String(rawUrl || "").trim().toLowerCase();
 
     return Boolean(baseUrl) && urlText.indexOf(baseUrl) === 0;
+  } catch (error) {
+    return false;
+  }
+}
+
+function isCurrentDashboardTab(tab) {
+  if (!tab || !tab.active) {
+    return false;
+  }
+
+  try {
+    var tabUrl = new URL(String(tab.url || ""));
+    var dashboardUrl = new URL(chrome.runtime.getURL("dashboard.html"));
+
+    return tabUrl.origin === dashboardUrl.origin && tabUrl.pathname === dashboardUrl.pathname;
   } catch (error) {
     return false;
   }
@@ -1584,13 +1937,19 @@ function getTabMeta(tab) {
   };
 }
 
+function getTabKey(tab) {
+  return tab && typeof tab.id === "number" ? String(tab.id) : "";
+}
+
 function createTabControls(tab) {
   var meta = getTabMeta(tab);
+  var tabKey = getTabKey(tab);
   var controls = createElement("div", "tab-tools");
   var protectButton = createElement("button", "tool-button", meta.isProtected ? "보호 해제" : "보호");
   var noteButton = createElement("button", "tool-button", meta.note ? "메모 수정" : "메모");
   var notePanel = createNotePanel(tab, meta.note || "");
 
+  notePanel.classList.toggle("is-hidden", !openNotePanelIds.has(tabKey));
   protectButton.type = "button";
   protectButton.classList.toggle("is-active", Boolean(meta.isProtected));
   protectButton.addEventListener("click", function handleProtectClick() {
@@ -1600,7 +1959,13 @@ function createTabControls(tab) {
   noteButton.type = "button";
   noteButton.classList.toggle("is-active", Boolean(meta.note));
   noteButton.addEventListener("click", function handleNoteClick() {
-    notePanel.classList.toggle("is-hidden");
+    var isHidden = notePanel.classList.toggle("is-hidden");
+
+    if (isHidden) {
+      openNotePanelIds.delete(tabKey);
+    } else {
+      openNotePanelIds.add(tabKey);
+    }
   });
 
   controls.appendChild(protectButton);
@@ -1617,7 +1982,7 @@ function createNotePanel(tab, note) {
   var textarea = document.createElement("textarea");
   var actions = createElement("div", "note-actions");
   var saveButton = createElement("button", "tool-button", "메모 저장");
-  var clearButton = createElement("button", "tool-button", "삭제");
+  var clearButton = createElement("button", "tool-button", "메모 지우기");
   var helper = createElement("p", "tab-meta", "메모는 판단을 돕는 표시이며 자동으로 닫기 제외하지 않습니다.");
 
   textarea.value = note;
@@ -1660,6 +2025,7 @@ async function saveTabNote(tab, note) {
     return;
   }
 
+  openNotePanelIds.add(getTabKey(tab));
   await updateTabMeta(tab, {
     note: String(note || "").slice(0, 240)
   });
@@ -1701,17 +2067,15 @@ async function rerenderAfterMetaChange() {
 }
 
 function getTabStatusLabel(tab, metaInfo) {
-  var domain = extractDomain(tab.url);
-
   if (metaInfo.isProtected) {
-    return domain + " · 사용자 보호";
+    return "사용자 보호";
   }
 
   if (tab.pinned || tab.active || getProtectedReason(tab.url) || isTabTidyInternalUrl(tab.url)) {
-    return domain + " · 자동 제외";
+    return "건드리지 않음";
   }
 
-  return domain;
+  return "";
 }
 
 function getAutomaticExcludedTabs(analysis) {
@@ -1761,7 +2125,7 @@ function formatCleanupDate(value) {
 
 function showUndoMessage(message) {
   elements.cleanupResultPanel.classList.remove("is-hidden");
-  elements.cleanupResultSummary.textContent = "Undo";
+  elements.cleanupResultSummary.textContent = "되돌리기";
   elements.cleanupResultMessage.textContent = message;
   elements.undoMessage.textContent = message;
   clearElement(elements.cleanupFailureList);
@@ -1783,7 +2147,8 @@ function getTabIndex(tab) {
   return typeof tab.index === "number" ? tab.index : Number.MAX_SAFE_INTEGER;
 }
 
-function createTabRow(tab, analysis, extraBadgeText) {
+function createTabRow(tab, analysis, extraBadgeText, options) {
+  var settings = options || {};
   var row = createElement("article", "tab-row");
   var main = createElement("div", "tab-main");
   var title = createElement("p", "tab-title", tab.title || "제목 없는 탭");
@@ -1797,7 +2162,10 @@ function createTabRow(tab, analysis, extraBadgeText) {
 
   main.appendChild(title);
   main.appendChild(url);
-  main.appendChild(meta);
+
+  if (meta.textContent) {
+    main.appendChild(meta);
+  }
 
   if (extraBadgeText) {
     badges.appendChild(createElement("span", "badge", extraBadgeText));
@@ -1808,15 +2176,15 @@ function createTabRow(tab, analysis, extraBadgeText) {
   }
 
   if (isTabTidyInternalUrl(tab.url)) {
-    badges.appendChild(createElement("span", "badge badge-protected", "TabTidy 내부"));
+    badges.appendChild(createElement("span", "badge badge-protected", "TabTidy 화면"));
   }
 
   if (tab.pinned) {
-    badges.appendChild(createElement("span", "badge badge-protected", "자동 제외 · 고정"));
+    badges.appendChild(createElement("span", "badge badge-protected", "고정된 탭"));
   }
 
   if (tab.active) {
-    badges.appendChild(createElement("span", "badge badge-protected", "자동 제외 · 활성"));
+    badges.appendChild(createElement("span", "badge badge-protected", "현재 보고 있는 탭"));
   }
 
   if (metaInfo.isProtected) {
@@ -1825,6 +2193,10 @@ function createTabRow(tab, analysis, extraBadgeText) {
 
   if (metaInfo.note) {
     badges.appendChild(createElement("span", "badge badge-warning", "메모 있음"));
+  }
+
+  if (manualCleanupTabIds.has(tab.id)) {
+    badges.appendChild(createElement("span", "badge badge-danger", "직접 고름"));
   }
 
   if (!protectedReason && analysis.duplicateTabIds.has(tab.id)) {
@@ -1840,10 +2212,37 @@ function createTabRow(tab, analysis, extraBadgeText) {
   }
 
   side.appendChild(badges);
+  if (settings.allowManualCleanup) {
+    side.appendChild(createManualCleanupControl(tab, analysis));
+  }
   side.appendChild(createTabControls(tab));
   row.appendChild(main);
   row.appendChild(side);
   return row;
+}
+
+function createManualCleanupControl(tab, analysis) {
+  var reason = getManualCloseExclusionReason(tab, analysis);
+  var isSelected = manualCleanupTabIds.has(tab.id);
+  var button = createElement(
+    "button",
+    isSelected ? "tool-button is-active" : "tool-button",
+    isSelected ? "닫을 탭에서 빼기" : "닫을 탭으로 선택"
+  );
+
+  button.type = "button";
+
+  if (reason) {
+    button.disabled = true;
+    button.textContent = reason === "보호한 탭" ? "보호됨" : "선택할 수 없음";
+    button.title = reason;
+  } else {
+    button.addEventListener("click", function handleManualCleanupClick() {
+      toggleManualCleanupSelection(tab);
+    });
+  }
+
+  return button;
 }
 
 function normalizeUrl(rawUrl) {
@@ -1895,7 +2294,7 @@ function extractDomain(rawUrl) {
     var parsed = new URL(String(rawUrl || ""));
     return parsed.hostname.replace(/^www\./, "") || "도메인 없음";
   } catch (error) {
-    return "URL 분석 불가";
+    return "주소 확인 불가";
   }
 }
 
@@ -1951,7 +2350,7 @@ function getProtectedReason(rawUrl) {
 
     return null;
   } catch (error) {
-    return "URL 분석 불가";
+    return "주소 확인 불가";
   }
 }
 
