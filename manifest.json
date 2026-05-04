@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "TabTidy",
+  "version": "0.1.0",
+  "description": "현재 창의 탭과 탭 그룹을 분석해 정리 필요도를 보여주는 탭 작업공간 관리 도구입니다.",
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage"
+  ],
+  "action": {
+    "default_title": "TabTidy",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "service-worker.js"
+  }
+}

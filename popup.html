@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TabTidy</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="popup-header">
+        <p class="eyebrow">TabTidy</p>
+        <h1>탭 작업공간 요약</h1>
+        <p class="header-copy">현재 창의 탭과 Chrome 탭 그룹 상태를 빠르게 확인합니다.</p>
+      </header>
+
+      <section id="loadingState" class="state-panel" aria-live="polite">
+        <div class="spinner" aria-hidden="true"></div>
+        <p>현재 창을 분석하는 중입니다.</p>
+      </section>
+
+      <section id="errorState" class="state-panel state-error is-hidden" aria-live="assertive">
+        <strong>분석할 수 없습니다.</strong>
+        <p id="errorMessage">잠시 후 다시 시도해 주세요.</p>
+      </section>
+
+      <section id="emptyState" class="state-panel is-hidden" aria-live="polite">
+        <strong>표시할 탭이 없습니다.</strong>
+        <p>현재 창에서 분석 가능한 탭을 찾지 못했습니다.</p>
+      </section>
+
+      <section id="summaryState" class="summary-grid is-hidden" aria-label="현재 창 탭 요약">
+        <article class="stat-tile">
+          <span class="stat-label">전체 탭</span>
+          <strong id="totalTabs">0</strong>
+        </article>
+        <article class="stat-tile">
+          <span class="stat-label">그룹 탭</span>
+          <strong id="groupedTabs">0</strong>
+        </article>
+        <article class="stat-tile">
+          <span class="stat-label">비그룹 탭</span>
+          <strong id="ungroupedTabs">0</strong>
+        </article>
+        <article class="stat-tile">
+          <span class="stat-label">탭 그룹</span>
+          <strong id="tabGroups">0</strong>
+        </article>
+      </section>
+
+      <button id="openDashboard" class="primary-button" type="button" disabled>
+        상세 분석 열기
+      </button>
+
+      <p class="safety-note">탭 닫기는 dashboard에서 선택, 미리보기, 확인을 거친 경우에만 실행됩니다.</p>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
