@@ -405,7 +405,7 @@ function findDuplicateTabs(tabs) {
 
     duplicateGroups.push({
       type: "normalized",
-      label: "추적 파라미터 제거 후 같은 주소",
+      label: "광고/통계용 꼬리표를 빼면 같은 주소",
       key: key,
       tabs: groupTabs
     });
